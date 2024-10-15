@@ -1,0 +1,1 @@
+python factor_eval_with_pyvene.py --model-name /home/sunao/eggechecat_llm/downloaded_models/Meta-Llama-3-8B-Instruct --data-path /home/sunao/eggechecat_llm/saves/wiki_factor/wiki_factor.csv --output-path /home/sunao/eggechecat_llm/saves/evaluation/factor_eval/wiki_factor/output-path-factor-wiki-baseline.json --early-exit-layers 0,2,4,6,8,10,12,14,32 --num-gpus 1

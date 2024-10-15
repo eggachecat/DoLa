@@ -9,12 +9,14 @@ import torch
 import torch.nn.functional as F
 from transformers import AutoTokenizer, AutoModelForCausalLM, LlamaTokenizer
 from transformers.generation.stopping_criteria import StoppingCriteriaList, StoppingCriteria, add_start_docstrings, STOPPING_CRITERIA_INPUTS_DOCSTRING
+from llamafactory.model.eggachecat_layer_hack import *
 
 import argparse
 import warnings
 import pandas as pd
 import numpy as np
-
+from llamafactory.eval import evaluator as LLamaFactoryEvaluator
+from llamafactory.hparams.parser import HfArgumentParser, _EVAL_ARGS
 
 class LLamaQaStoppingCriteria(StoppingCriteria):
     """
@@ -41,40 +43,14 @@ class LLamaQaStoppingCriteria(StoppingCriteria):
         return stop
 
 class DoLa:
-    def __init__(self, model_name, device, num_gpus, max_gpu_memory=27):
-        self.model_name = model_name
-        self.device = device
-        self.num_gpus = num_gpus
+    def __init__(self):
+
+        evalualtor = LLamaFactoryEvaluator.Evaluator()
         self.stopping_criteria = None
-        self.max_gpu_memory = max_gpu_memory
+        self.model = evalualtor.model
+        self.tokenizer = evalualtor.tokenizer
+        self.device = evalualtor.model.device
 
-        self.model, self.tokenizer = self.load_model(model_name)
-
-    def load_model(self, model_name):
-        if self.device == "cuda":
-            kwargs = {"torch_dtype": torch.float16, "offload_folder": f"{model_name}/offload"}
-            if self.num_gpus == "auto":
-                kwargs["device_map"] = "auto"
-            else:
-                self.num_gpus = int(self.num_gpus)
-                if self.num_gpus != 1:
-                    kwargs.update({
-                        "device_map": "auto",
-                        "max_memory": {i: f"{self.max_gpu_memory}GiB" for i in range(self.num_gpus)},
-                    })
-        elif self.device == "cpu":
-            kwargs = {}
-        else:
-            raise ValueError(f"Invalid device: {self.device}")
-        
-        tokenizer = AutoTokenizer.from_pretrained(model_name if not 'vicuna' in model_name else 'huggyllama/llama-7b')
-        model = AutoModelForCausalLM.from_pretrained(model_name,
-            low_cpu_mem_usage=True, **kwargs)
-
-        if self.device == "cuda" and self.num_gpus == 1:
-            model.cuda()
-        
-        return model, tokenizer
 
     def set_stop_words(self, stop_words):
         self.stop_words = stop_words
@@ -151,20 +127,7 @@ class DoLa:
             prefix_ids = self.tokenizer(input_text1, return_tensors="pt").input_ids.to(self.device)
             continue_ids = input_ids[0, prefix_ids.shape[-1]:]
             if mode == 'baseline':
-                outputs = self.model(                    {
-                        "input_ids": input_ids, 
-                        "output_hidden_states": True, 
-                        "return_dict":  True,
-                        "output_attentions": True
-                    },
-                    # input_ids=input_ids,
-                    # return_dict=True,
-                    # output_attentions=False,
-                    # output_hidden_states=False,
-                     output_original_output=True
-                )
-                dict_outputs = data_collection_factory.data_collection
-                outputs = dict_outputs[32][0].squeeze(0)
+                outputs = self.model(input_ids)[0].squeeze(0)
                 outputs = outputs.log_softmax(-1)  # logits to log probs
 
                 # skip tokens in the prompt -- we only care about the answer
@@ -172,7 +135,7 @@ class DoLa:
 
                 # get logprobs for each token in the answer
                 log_probs = outputs[range(outputs.shape[0]), continue_ids].sum().item()
-
+                
             elif mode == 'dola-static':
                 dict_outputs, outputs = self.model(
                     input_ids=input_ids,
@@ -218,6 +181,7 @@ class DoLa:
                     # early_exit_layers=candidate_premature_layers + [mature_layer],
                 )
                 dict_outputs = data_collection_factory.data_collection
+                # dict_outputs[mature_layer] = outputs.logits
                 # print(dict_outputs)
 
                 for seq_i in range(prefix_ids.shape[-1] - 1, input_ids.shape[-1] - 1):

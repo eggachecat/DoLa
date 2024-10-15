@@ -40,6 +40,16 @@ class LLamaQaStoppingCriteria(StoppingCriteria):
                     break
         return stop
 
+weights = [ 
+    1.4766,  1.0469,  0.9727,  0.9062, -0.5117, -0.3086,  0.2637, -0.2695,
+    0.2285,  0.0400,  0.3965,  0.2812,  0.3594, -0.1621, -0.2041, -0.4531,
+    -0.1768, -0.1455,  0.2393,  0.1040,  0.2490, -0.0280,  0.1377,  0.0889,
+    0.2402, -0.0593, -0.2539, -0.0214, -0.1934, -0.1289,  0.1416,  0.1611,
+    0.7031
+]
+
+weights = [(max(weights) - w) / (max(weights) - min(weights)) for w in weights]
+
 class DoLa:
     def __init__(self, model_name, device, num_gpus, max_gpu_memory=27):
         self.model_name = model_name
@@ -151,20 +161,7 @@ class DoLa:
             prefix_ids = self.tokenizer(input_text1, return_tensors="pt").input_ids.to(self.device)
             continue_ids = input_ids[0, prefix_ids.shape[-1]:]
             if mode == 'baseline':
-                outputs = self.model(                    {
-                        "input_ids": input_ids, 
-                        "output_hidden_states": True, 
-                        "return_dict":  True,
-                        "output_attentions": True
-                    },
-                    # input_ids=input_ids,
-                    # return_dict=True,
-                    # output_attentions=False,
-                    # output_hidden_states=False,
-                     output_original_output=True
-                )
-                dict_outputs = data_collection_factory.data_collection
-                outputs = dict_outputs[32][0].squeeze(0)
+                outputs = self.model(input_ids)[0].squeeze(0)
                 outputs = outputs.log_softmax(-1)  # logits to log probs
 
                 # skip tokens in the prompt -- we only care about the answer
@@ -172,7 +169,7 @@ class DoLa:
 
                 # get logprobs for each token in the answer
                 log_probs = outputs[range(outputs.shape[0]), continue_ids].sum().item()
-
+                
             elif mode == 'dola-static':
                 dict_outputs, outputs = self.model(
                     input_ids=input_ids,
@@ -243,11 +240,14 @@ class DoLa:
 
                     # 6. Reduce the batchmean
                     js_divs = js_divs.mean(-1)  # shape: (num_premature_layers,)
+                    # print(js_divs)
+                    js_divs *= torch.tensor([(weights[i-1]) for i in candidate_premature_layers], device=self.device)
                     premature_layer = candidate_premature_layers[int(js_divs.argmax().cpu().item())]
+                    # print('premature_layer', premature_layer)
                     premature_layer_dist[premature_layer] += 1
 
                     premature_layers.append(premature_layer)
-
+                print(premature_layers)
                 base_logits = torch.zeros_like(dict_outputs[mature_layer][0, prefix_ids.shape[-1] - 1:-1])
                 for i, l in enumerate(premature_layers):
                    base_logits[i] = dict_outputs[l][0, prefix_ids.shape[-1] - 1 + i]
